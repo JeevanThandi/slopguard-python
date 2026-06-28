@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slopguard-todolist-fixture"
+version = "0.0.0"
+description = "Reference fixture for slopguard-python's regression baseline."
+requires-python = ">=3.9"
+
+[tool.setuptools]
+packages = ["todolist"]

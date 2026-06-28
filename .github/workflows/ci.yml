@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dev tooling (coverage.py only)
+        run: python -m pip install --upgrade pip coverage
+
+      - name: Compile (syntax gate)
+        run: python -m compileall -q src tests
+
+      - name: Test + coverage floor (95%)
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m coverage run --source=src -m unittest discover -s tests
+          python -m coverage report -m
+          python -m coverage report --fail-under=95
+
+  dogfood:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install coverage.py
+        run: python -m pip install --upgrade pip coverage
+
+      # slopguard-python must keep its own source under control. Complexity-only
+      # so the gate is fast and independent of the test suite.
+      - name: Dogfood (analyze own source)
+        env:
+          PYTHONPATH: src
+        run: python -m slopguard analyze --path src/slopguard --no-coverage --fail-over 300
+
+      # Regression baseline: the fixture must report a stable shape. Drift here
+      # signals an analyzer bug, not a code change in the fixture.
+      - name: Baseline assertion (sample-apps/todolist)
+        env:
+          PYTHONPATH: src
+        run: |
+          json=$(python -m slopguard analyze \
+            --path sample-apps/todolist/todolist \
+            --project-dir sample-apps/todolist --json --quiet)
+          methods=$(echo "$json" | python -c 'import sys,json; print(json.load(sys.stdin)["summary"]["methodCount"])')
+          crappy=$(echo "$json" | python -c 'import sys,json; print(json.load(sys.stdin)["summary"]["crappyMethodCount"])')
+          echo "methods=$methods crappy=$crappy"
+          test "$methods" = "12" || { echo "expected 12 methods, got $methods"; exit 1; }
+          test "$crappy" = "0"   || { echo "expected 0 crappy methods, got $crappy"; exit 1; }
