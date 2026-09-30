@@ -98,7 +98,10 @@ class ArithmeticTests(unittest.TestCase):
         self.assertEqual([g[3] for g in got], ["%", "*", "-="])
 
     def test_long_concatenation_chain_does_not_recurse(self):
-        chain = " + ".join(["'s'"] + [f"x{i}" for i in range(3000)])
+        # Deeper than the recursion limit, so a recursive stringy check would
+        # fail. Not much deeper: Python 3.11's parser itself cannot build the
+        # AST for a chain of about 3000 terms.
+        chain = " + ".join(["'s'"] + [f"x{i}" for i in range(sys.getrecursionlimit() + 500)])
         self.assertEqual(mutants(f"v = {chain}\n", "arithmetic"), [])
 
 
