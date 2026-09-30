@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "slopguard-python"
-version = "0.1.0"
+version = "0.2.0"
 description = "CRAP (Change Risk Anti-Patterns) guardrail for Python — score complex, undertested code in one number you can gate in CI."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Jeevan Thandi" }]
-keywords = ["complexity", "coverage", "crap", "cognitive-complexity", "cyclomatic-complexity", "code-quality", "ci", "slopguard"]
+keywords = ["complexity", "coverage", "crap", "cognitive-complexity", "cyclomatic-complexity", "code-quality", "mutation-testing", "ci", "slopguard"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

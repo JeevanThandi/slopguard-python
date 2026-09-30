@@ -25,6 +25,13 @@ def is_python_source(path: str) -> bool:
     return path.endswith(".py")
 
 
+def is_generated(src: str) -> bool:
+    """True when the file's header carries a codegen marker (``@generated``,
+    "DO NOT EDIT", protoc's banner). Both ``analyze`` and ``mutate`` skip
+    such files."""
+    return _GENERATED_HEADER.search(src[:2048]) is not None
+
+
 def analyze_file(abs_path: str, reported_path: str) -> FileReport:
     """Read and analyze a single Python source file. ``reported_path`` is
     recorded on the result (typically relative to the analysis root)."""
@@ -35,6 +42,6 @@ def analyze_file(abs_path: str, reported_path: str) -> FileReport:
         raise unreadable_file(abs_path, exc)
     except UnicodeDecodeError as exc:
         raise unreadable_file(abs_path, exc)
-    if _GENERATED_HEADER.search(src[:2048]):
+    if is_generated(src):
         return FileReport(path=reported_path)
     return analyze_source(src, reported_path)

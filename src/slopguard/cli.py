@@ -1,9 +1,12 @@
-"""The command-line surface: the default ``analyze`` command and ``version``.
+"""The command-line surface: the default ``analyze`` command, ``mutate`` and
+``version``.
 
-``Run(argv, stdout, stderr) -> int`` is a thin shim over the analysis and
-coverage layers so the wiring can be exercised in-process by tests. stdout
-carries the report; stderr carries progress and errors. Exit codes: 0 success,
-1 error, 2 when ``--fail-over`` is exceeded.
+``Run(argv, stdout, stderr) -> int`` is a thin shim over the analysis,
+coverage and mutation layers so the wiring can be exercised in-process by
+tests. stdout carries the report; stderr carries progress and errors. Exit
+codes: 0 success, 1 error, 2 when ``--fail-over`` is exceeded (``analyze``) or
+the score is below ``--fail-under`` (``mutate``), 130 / 143 / 129 when
+SIGINT / SIGTERM / SIGHUP stops ``mutate``.
 """
 
 from __future__ import annotations
@@ -11,15 +14,26 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
-from typing import IO, List
+from typing import IO, List, Optional
 
 from . import errors
 from .coverage import MODE_AUTO, MODE_NONE, MODE_PREBUILT, CoverageSource
 from .coverage import run as run_pipeline
 from .crap import DEFAULT_CRAP_THRESHOLD
 from .diranalyzer import DEFAULT_EXCLUDE_GLOBS, AnalysisOptions
-from .formatting import error_json, error_text_line, json_report, pretty_report
+from .formatting import (
+    error_json,
+    error_text_line,
+    json_report,
+    mutation_json_report,
+    mutation_pretty_report,
+    pretty_report,
+)
+from .mutation import OPERATOR_IDS, MutateOptions, MutationInterrupted, parse_operators
+from .mutation import run as run_mutation
+from .mutation.runner import TIMEOUT_GRACE_SECONDS
 from .progress import NORMAL, VERBOSE, ProgressReporter
 from .version import TOOL_NAME, VERSION
 
@@ -33,16 +47,21 @@ coverage.py). Coverage is an artifact of the analysis, not an input.
   Formula:  wCRAP(m) = (cyc × cog) × (1 − cov/100)³ + sqrt(cyc × cog)
   Default crappy threshold: 30.
 
+Use `mutate` to check that the tests catch changes to the code.
+
 Usage:
   {TOOL_NAME} [analyze] [flags]
+  {TOOL_NAME} mutate [flags]
   {TOOL_NAME} version
 
 Commands:
   analyze   Walk a directory of Python sources, drive the test suite for
             coverage, emit a wCRAP report (text or JSON). The default command.
+  mutate    Mutate the source one change at a time, run the tests against each
+            mutant, and report the mutants the tests miss (text or JSON).
   version   Print version metadata as JSON.
 
-Run '{TOOL_NAME} analyze --help' for the analyze flags.
+Run '{TOOL_NAME} analyze --help' or '{TOOL_NAME} mutate --help' for the flags.
 """
 
 _ANALYZE_EPILOG = f"""examples:
@@ -53,6 +72,22 @@ _ANALYZE_EPILOG = f"""examples:
   {TOOL_NAME} analyze --path ./pkg --no-coverage           # skip the test run (complexity-only)
   {TOOL_NAME} analyze --path . --runner pytest             # name the test runner
   {TOOL_NAME} analyze --path . --coverage-file coverage.json   # join a prebuilt coverage.py report
+"""
+
+_MUTATE_EPILOG = f"""statuses: killed (a test failed), survived (every test passed), timeout,
+no_coverage (no test runs the line), compile_error, ignored, pending (not run).
+operators: {", ".join(OPERATOR_IDS[:5])},
+           {", ".join(OPERATOR_IDS[5:])}.
+Ignore marker, on the mutated line or on a comment line above it:
+  # slopguard-ignore-mutant(boundary): equal values keep the same best
+
+examples:
+  {TOOL_NAME} mutate --path src/pkg/store.py           # one file
+  {TOOL_NAME} mutate --path src --include "pkg/core/**" --exclude "**/legacy/**"
+  {TOOL_NAME} mutate --path src --operators boundary,negate_conditional
+  {TOOL_NAME} mutate --path src --dry-run              # list mutants, run nothing
+  {TOOL_NAME} mutate --path src --json | jq '.mutants[] | select(.status == "survived")'
+  {TOOL_NAME} mutate --path src --fail-under 80        # fail CI below an 80% score
 """
 
 
@@ -70,6 +105,8 @@ def run(argv: List[str], stdout: IO[str], stderr: IO[str]) -> int:
         if head == "--version":
             stdout.write(VERSION + "\n")
             return 0
+        if head == "mutate":
+            return _run_mutate(argv[1:], stdout, stderr)
         if head == "analyze":
             rest = argv[1:]
     return _run_analyze(rest, stdout, stderr)
@@ -180,6 +217,127 @@ def _run_analyze(args: List[str], stdout: IO[str], stderr: IO[str]) -> int:
             )
             return 2
     return 0
+
+
+def _build_mutate_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog=f"{TOOL_NAME} mutate",
+        description="Mutate the source one change at a time, run the tests against each\n"
+        "mutant, and report the mutants the tests miss. A killed mutant shows that a\n"
+        "test checks the changed line, not only runs it.",
+        epilog=_MUTATE_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("-p", "--path", default=".", help="Directory of Python sources, or a single .py file, to mutate.")
+    p.add_argument("--include", action="append", metavar="GLOB", help="Only mutate files matching this glob. Repeatable.")
+    p.add_argument("--exclude", action="append", metavar="GLOB", help="Extra glob of files/dirs to skip (combined with defaults). Repeatable.")
+    p.add_argument("--no-default-excludes", action="store_true", help="Skip built-in excludes (.venv, test files, generated code, caches).")
+    p.add_argument(
+        "--operators",
+        action="append",
+        metavar="IDS",
+        help="Comma-separated mutation operator ids to apply. Repeatable. Defaults to all.",
+    )
+    p.add_argument("--project-dir", help="Project root the tests run in. Defaults to the nearest project marker above --path.")
+    p.add_argument("--runner", choices=("pytest", "unittest"), help="Test runner to drive (auto-detected when omitted).")
+    p.add_argument(
+        "--no-coverage",
+        action="store_true",
+        help="Skip the coverage run and test every mutant, including mutants on lines no test executes.",
+    )
+    p.add_argument(
+        "--timeout",
+        metavar="SECONDS",
+        help=f"Per-mutant test timeout in seconds. Defaults to 3 x the baseline run time, rounded up, + {TIMEOUT_GRACE_SECONDS}.",
+    )
+    p.add_argument("--dry-run", action="store_true", help="List the mutants without running any tests.")
+    p.add_argument("--json", action="store_true", dest="json_out", help="Emit JSON to stdout (default is pretty text).")
+    p.add_argument(
+        "--fail-under",
+        metavar="SCORE",
+        help="Exit with code 2 if the mutation score (0-100) is below this value. Useful in CI.",
+    )
+    p.add_argument("-v", "--verbose", action="store_true", help="Stream test-runner output to stderr.")
+    p.add_argument("--quiet", action="store_true", help="Suppress all progress chatter on stderr.")
+    return p
+
+
+def _run_mutate(args: List[str], stdout: IO[str], stderr: IO[str]) -> int:
+    parser = _build_mutate_parser()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            ns = parser.parse_args(args)
+        except SystemExit as exc:
+            return 0 if exc.code in (0, None) else 1
+
+    json_out = ns.json_out
+
+    def emit_err(err: BaseException) -> None:
+        env = errors.envelope_for(err)
+        stderr.write((error_json(env) if json_out else error_text_line(env)) + "\n")
+
+    try:
+        options = _mutate_options(ns)
+        fail_under = _parse_number("--fail-under", ns.fail_under, positive=False)
+    except errors.SlopguardError as exc:
+        emit_err(exc)
+        return 1
+    progress = _resolve_progress(stderr, ns.verbose, ns.quiet)
+
+    try:
+        report = run_mutation(options, progress)
+    except MutationInterrupted as exc:
+        return exc.exit_code
+    except Exception as exc:  # noqa: BLE001 — surfaced as a stable error envelope
+        emit_err(exc)
+        return 1
+
+    stdout.write(mutation_json_report(report) + "\n" if json_out else mutation_pretty_report(report))
+
+    score = report["summary"]["mutationScore"]
+    if _below_fail_under(score, fail_under, ns.dry_run):
+        stderr.write(f"{TOOL_NAME}: mutation score {score:.2f}% is below --fail-under {fail_under:.2f}\n")
+        return 2
+    return 0
+
+
+def _mutate_options(ns: argparse.Namespace) -> MutateOptions:
+    """Validate the ``mutate`` flags. Raises ``invalid_argument``."""
+    exclude = list(ns.exclude or [])
+    defaults = [] if ns.no_default_excludes else list(DEFAULT_EXCLUDE_GLOBS)
+    return MutateOptions(
+        source_path=os.path.abspath(_expand_tilde(ns.path)),
+        analysis=AnalysisOptions(include_globs=ns.include or [], exclude_globs=defaults + exclude),
+        operators=parse_operators(ns.operators or []),
+        runner=ns.runner,
+        project_dir=os.path.abspath(_expand_tilde(ns.project_dir)) if ns.project_dir else None,
+        coverage=not ns.no_coverage,
+        timeout_seconds=_parse_number("--timeout", ns.timeout, positive=True),
+        dry_run=ns.dry_run,
+    )
+
+
+def _below_fail_under(score: Optional[float], fail_under: Optional[float], dry_run: bool) -> bool:
+    """``--fail-under`` fails a run whose score is strictly below it. A dry run
+    or a ``null`` score never fails."""
+    if fail_under is None or dry_run or score is None:
+        return False
+    return score < fail_under
+
+
+def _parse_number(name: str, raw: Optional[str], positive: bool) -> Optional[float]:
+    """A finite number (``positive``: also > 0), or ``None`` when the flag is
+    absent. Raises ``invalid_argument`` otherwise."""
+    if raw is None:
+        return None
+    reason = f"not a positive number: {raw}" if positive else f"not a number: {raw}"
+    try:
+        value = float(raw)
+    except ValueError:
+        raise errors.invalid_argument(name, reason)
+    if not math.isfinite(value) or (positive and value <= 0):
+        raise errors.invalid_argument(name, reason)
+    return value
 
 
 def _resolve_progress(stderr: IO[str], verbose: bool, quiet: bool) -> ProgressReporter:

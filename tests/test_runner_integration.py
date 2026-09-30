@@ -75,6 +75,22 @@ class SpawnTests(unittest.TestCase):
             _spawn(["/no/such/binary-xyz"], tempfile.mkdtemp(), self._env(), ProgressReporter.silent())
         self.assertEqual(ctx.exception.code, ERR_RUNNER_UNAVAILABLE)
 
+    def test_interrupt_kills_the_test_run(self):
+        # A signal handler raising while output is read must not orphan the child.
+        class Interrupting(ProgressReporter):
+            def raw(self, chunk):
+                raise KeyboardInterrupt
+
+        import io
+
+        with self.assertRaises(KeyboardInterrupt):
+            _spawn(
+                [sys.executable, "-c", "import os, time; print(os.getpid(), flush=True); time.sleep(120)"],
+                tempfile.mkdtemp(),
+                self._env(),
+                Interrupting(io.StringIO(), NORMAL),
+            )
+
     def test_large_output_is_tail_trimmed_and_streamed(self):
         # >8 KB of output forces the bounded-tail trim; verbose streams it.
         import io
@@ -108,6 +124,14 @@ class RunnerLogicTests(unittest.TestCase):
         with self.assertRaises(SlopguardError) as ctx:
             run_tests("unittest", ".", tempfile.mkdtemp(), ProgressReporter.silent())
         self.assertEqual(ctx.exception.code, ERR_TEST_RUN_FAILED)
+
+    def test_nonzero_exit_no_data_without_raising(self):
+        # The mutate coverage baseline: a failed run is reported, not raised.
+        self._patch(exit_code=2, produced=False)
+        outcome = run_tests("unittest", ".", tempfile.mkdtemp(), ProgressReporter.silent(), raise_on_failure=False)
+        self.assertFalse(outcome.tests_passed)
+        self.assertIsNone(outcome.coverage_json_path)
+        self.assertEqual((outcome.exit_code, outcome.output_tail), (2, "captured output"))
 
     def test_zero_exit_no_data_returns_none(self):
         self._patch(exit_code=0, produced=False)

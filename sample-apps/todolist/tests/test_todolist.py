@@ -24,6 +24,11 @@ class StoreTests(unittest.TestCase):
         t = self.store.add("write tests")
         self.assertEqual(self.store.get(t.id).title, "write tests")
 
+    def test_ids_count_up_from_one(self):
+        first = self.store.add("first")
+        second = self.store.add("second")
+        self.assertEqual((first.id, second.id), (1, 2))
+
     def test_remove(self):
         t = self.store.add("temp")
         self.assertTrue(self.store.remove(t.id))

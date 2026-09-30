@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
 
 from .errors import file_not_found, unreadable_file
 from .fileanalyzer import analyze_file, is_python_source
@@ -74,6 +74,13 @@ def analyze_tree(root: str, options: AnalysisOptions) -> List[FileReport]:
     Returns one :class:`FileReport` per analyzed file, with ``path`` relative to
     ``root`` (forward-slash, no leading ``./``), sorted by path.
     """
+    return [analyze_file(abs_path, rel) for abs_path, rel in list_files(root, options)]
+
+
+def list_files(root: str, options: AnalysisOptions) -> List[Tuple[str, str]]:
+    """The ``(absolute path, relative path)`` pairs an analysis of ``root``
+    covers, sorted by relative path. ``mutate`` walks the same selection, so
+    both commands honour the same include/exclude rules."""
     root_abs = os.path.abspath(root)
     if not os.path.exists(root_abs):
         raise file_not_found(root_abs)
@@ -85,9 +92,9 @@ def analyze_tree(root: str, options: AnalysisOptions) -> List[FileReport]:
         root_prefix = os.path.dirname(root_abs)
         files = [root_abs]
 
-    reports = [analyze_file(f, _relativize(f, root_prefix)) for f in files]
-    reports.sort(key=lambda r: r.path)
-    return reports
+    refs = [(f, _relativize(f, root_prefix)) for f in files]
+    refs.sort(key=lambda ref: ref[1])
+    return refs
 
 
 def _enumerate(root_path: str, options: AnalysisOptions) -> List[str]:

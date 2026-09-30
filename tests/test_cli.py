@@ -40,7 +40,7 @@ class CliTests(unittest.TestCase):
     def test_bare_version_flag(self):
         out, _, code = run_cli("--version")
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "0.1.0")
+        self.assertEqual(out.strip(), "0.2.0")
 
     def test_analyze_no_coverage_text(self):
         d = temp_project()

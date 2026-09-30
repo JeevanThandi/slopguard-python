@@ -102,8 +102,7 @@ def aggregate(
     if coverage_available:
         weighted_cov = (total_covered / total_executable * 100) if total_executable > 0 else 0.0
 
-    when = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    generated = when.strftime("%Y-%m-%dT%H:%M:%S.") + f"{when.microsecond // 1000:03d}Z"
+    generated = format_generated_at(generated_at)
 
     all_notes = [_SCHEMA_TWO_NOTE] + list(notes or [])
 
@@ -133,6 +132,13 @@ def aggregate(
         "methods": methods,
         "types": types,
     }
+
+
+def format_generated_at(when: Optional[datetime] = None) -> str:
+    """``generatedAt``: UTC with milliseconds and a ``Z`` suffix (now when
+    ``when`` is omitted). Shared by the CRAP and mutation reports."""
+    moment = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
 
 
 def _aggregate_types(

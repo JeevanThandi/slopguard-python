@@ -14,6 +14,9 @@ Library use::
     from slopguard.coverage import run, CoverageSource    # full pipeline
     report = run("./src", CoverageSource(), threshold=30.0,
                  options=default_analysis_options())
+
+    from slopguard.mutation import MutateOptions, run     # mutation testing
+    report = run(MutateOptions(source_path="./src", dry_run=True))
 """
 
 from .aggregator import aggregate
@@ -23,7 +26,8 @@ from .crap import DEFAULT_CRAP_THRESHOLD, crap_score, weighted_complexity
 from .diranalyzer import AnalysisOptions, analyze_tree, default_analysis_options
 from .errors import SlopguardError
 from .fileanalyzer import analyze_file
-from .formatting import json_report, pretty_report
+from .formatting import json_report, mutation_json_report, mutation_pretty_report, pretty_report
+from .mutation import OPERATOR_IDS, MutateOptions, generate_mutants
 from .version import SCHEMA_VERSION, TOOL_NAME, VERSION
 
 __all__ = [
@@ -36,7 +40,12 @@ __all__ = [
     "crap_score",
     "default_analysis_options",
     "DEFAULT_CRAP_THRESHOLD",
+    "generate_mutants",
     "json_report",
+    "MutateOptions",
+    "mutation_json_report",
+    "mutation_pretty_report",
+    "OPERATOR_IDS",
     "pretty_report",
     "SlopguardError",
     "SCHEMA_VERSION",

@@ -67,3 +67,20 @@ jobs:
           echo "methods=$methods crappy=$crappy"
           test "$methods" = "12" || { echo "expected 12 methods, got $methods"; exit 1; }
           test "$crappy" = "0"   || { echo "expected 0 crappy methods, got $crappy"; exit 1; }
+
+      # Mutation baseline: the fixture's tests must kill every mutant. A change
+      # here means the operator set or the mutant runner changed.
+      - name: Mutation baseline (sample-apps/todolist)
+        env:
+          PYTHONPATH: src
+        run: |
+          json=$(python -m slopguard mutate \
+            --path sample-apps/todolist/todolist \
+            --project-dir sample-apps/todolist --json --quiet)
+          mutants=$(echo "$json" | python -c 'import sys,json; print(json.load(sys.stdin)["summary"]["mutantCount"])')
+          killed=$(echo "$json" | python -c 'import sys,json; print(json.load(sys.stdin)["summary"]["killed"])')
+          survived=$(echo "$json" | python -c 'import sys,json; print(json.load(sys.stdin)["summary"]["survived"])')
+          echo "mutants=$mutants killed=$killed survived=$survived"
+          test "$mutants" = "12" || { echo "expected 12 mutants, got $mutants"; exit 1; }
+          test "$killed" = "12"  || { echo "expected 12 killed mutants, got $killed"; exit 1; }
+          test "$survived" = "0" || { echo "expected 0 surviving mutants, got $survived"; exit 1; }

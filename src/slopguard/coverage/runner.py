@@ -26,13 +26,21 @@ _TAIL_LIMIT = 8 * 1024
 
 
 class TestOutcome:
-    """Where coverage landed after a test run."""
+    """Where coverage landed after a test run, plus how the run ended."""
 
-    __slots__ = ("coverage_json_path", "tests_passed")
+    __slots__ = ("coverage_json_path", "tests_passed", "exit_code", "output_tail")
 
-    def __init__(self, coverage_json_path: Optional[str], tests_passed: bool) -> None:
+    def __init__(
+        self,
+        coverage_json_path: Optional[str],
+        tests_passed: bool,
+        exit_code: int = 0,
+        output_tail: str = "",
+    ) -> None:
         self.coverage_json_path = coverage_json_path
         self.tests_passed = tests_passed
+        self.exit_code = exit_code
+        self.output_tail = output_tail
 
 
 def run_tests(
@@ -41,13 +49,15 @@ def run_tests(
     coverage_dir: str,
     progress: ProgressReporter,
     python: Optional[str] = None,
+    raise_on_failure: bool = True,
 ) -> TestOutcome:
     """Run the suite under coverage and return where coverage landed.
 
     A non-zero exit with a coverage report present means tests failed but
     coverage was still emitted — keep going. A non-zero exit with no report means
     the run itself broke (import/build error, missing coverage) — abort with the
-    output tail.
+    output tail, or, with ``raise_on_failure=False`` (the ``mutate`` coverage
+    baseline), return an outcome with no coverage path instead.
     """
     python = python or sys.executable
     _ensure_coverage_available(python)
@@ -72,9 +82,11 @@ def run_tests(
     produced = _produce_json(python, project_root, env, json_path, progress)
 
     if exit_code == 0:
-        return TestOutcome(json_path if produced else None, True)
+        return TestOutcome(json_path if produced else None, True, exit_code, tail)
     if produced:
-        return TestOutcome(json_path, False)
+        return TestOutcome(json_path, False, exit_code, tail)
+    if not raise_on_failure:
+        return TestOutcome(None, False, exit_code, tail)
     raise test_run_failed(exit_code, tail.strip() or "no output captured")
 
 
@@ -132,12 +144,19 @@ def _spawn(
     chunks: List[str] = []
     size = 0
     assert proc.stdout is not None
-    for line in proc.stdout:
-        progress.raw(line)
-        chunks.append(line)
-        size += len(line)
-        while len(chunks) > 1 and size > _TAIL_LIMIT:
-            size -= len(chunks.pop(0))
-    proc.stdout.close()
+    try:
+        for line in proc.stdout:
+            progress.raw(line)
+            chunks.append(line)
+            size += len(line)
+            while len(chunks) > 1 and size > _TAIL_LIMIT:
+                size -= len(chunks.pop(0))
+    except BaseException:
+        # Interrupted (a signal, Ctrl-C): never leave the test run behind.
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        proc.stdout.close()
     code = proc.wait()
     return code, "".join(chunks)

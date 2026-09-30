@@ -12,6 +12,13 @@ baseline assertion expects:
 methods: 12   crappy: 0   types: 2   coverage: 100%
 ```
 
+The mutation baseline (`make mutate-baseline`) expects its tests to kill every
+mutant:
+
+```
+mutants: 12   killed: 12   survived: 0   score: 100
+```
+
 It has its own `pyproject.toml`, so `**/sample-apps/**` is excluded from scans
 of the parent repo. Analyze it on demand:
 
@@ -20,4 +27,8 @@ slopguard-python analyze \
   --path sample-apps/todolist/todolist \
   --project-dir sample-apps/todolist --json --quiet \
   | python -c 'import sys,json; r=json.load(sys.stdin); print(r["summary"])'
+
+slopguard-python mutate \
+  --path sample-apps/todolist/todolist \
+  --project-dir sample-apps/todolist
 ```

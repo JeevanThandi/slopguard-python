@@ -72,6 +72,11 @@ class IndexTests(unittest.TestCase):
         self.assertAlmostEqual(idx.file_coverage("/proj/a.py"), 60.0)
         self.assertEqual(idx.file_count(), 1)
 
+    def test_exact_lookup_skips_the_basename_fallback(self):
+        idx = self.build("/proj")
+        self.assertIsNone(idx.method_coverage("/elsewhere/a.py", 1, 3, exact=True))
+        self.assertAlmostEqual(idx.method_coverage("/proj/a.py", 1, 3, exact=True), 200 / 3)
+
     def test_basename_suffix_fallback(self):
         cov = parse_coverage_json(
             json.dumps({"files": {"/ci/checkout/src/a.py": {"executed_lines": [1], "missing_lines": []}}})

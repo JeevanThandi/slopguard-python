@@ -6,7 +6,7 @@ byte-compatible across all of them. Edit ``VERSION`` for releases.
 """
 
 # Released semantic version of slopguard-python.
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # Stable tool identifier emitted in reports (matches the sibling naming:
 # slopguard-go, slopguard-kotlin, slopguard-swift).

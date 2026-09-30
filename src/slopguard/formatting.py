@@ -1,4 +1,5 @@
-"""Report formatters: human-readable text and stable, versioned JSON.
+"""Report formatters: human-readable text and stable, versioned JSON, for the
+CRAP report (``analyze``) and the mutation report (``mutate``).
 
 The JSON encoder sorts keys alphabetically and renders whole-number floats
 without a trailing ``.0`` (e.g. ``30`` not ``30.0``) so output is diff-stable in
@@ -8,9 +9,23 @@ CI and byte-aligned with the Go/Kotlin/Swift/TypeScript siblings.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List
 
 from .version import TOOL_NAME
+
+# Longest ``original`` / ``replacement`` snippet in the mutation listing, in
+# code points (longer ones keep 39 and end with an ellipsis).
+_SNIPPET_LIMIT = 40
+_WHITESPACE = re.compile(r"\s+")
+
+# Mutation report sections that list mutants, in display order.
+_MUTANT_SECTIONS = (
+    ("survived", "Survived ({n}) — tests still pass with these changes"),
+    ("no_coverage", "No coverage ({n}) — no test runs these lines"),
+    ("timeout", "Timed out ({n}) — counted as killed"),
+    ("pending", "Mutants ({n}, not run)"),
+)
 
 
 def pretty_report(report: Dict[str, Any], top_n: int) -> str:
@@ -30,6 +45,43 @@ def pretty_report(report: Dict[str, Any], top_n: int) -> str:
 def json_report(report: Dict[str, Any]) -> str:
     """Encode the report as indented JSON with sorted keys."""
     return json.dumps(_normalize(report), indent=2, sort_keys=True, ensure_ascii=False)
+
+
+def mutation_pretty_report(report: Dict[str, Any]) -> str:
+    """Render a mutation report as text: metadata, optional notes, a summary,
+    then the survived / no-coverage / timed-out (dry run: pending) mutants."""
+    parts: List[str] = [_mutation_header(report), "\n"]
+    if report["notes"]:
+        parts.append(_notes_section(report))
+        parts.append("\n")
+    parts.append(_mutation_summary(report["summary"]))
+    for status, title in _MUTANT_SECTIONS:
+        listed = [m for m in report["mutants"] if m["status"] == status]
+        if not listed:
+            continue
+        parts.append("\n" + title.format(n=len(listed)) + "\n")
+        for m in listed:
+            parts.append(f"  {_mutant_line(m)}\n")
+    return "".join(parts)
+
+
+def mutation_json_report(report: Dict[str, Any]) -> str:
+    """Encode a mutation report as indented JSON with sorted keys."""
+    return json_report(report)
+
+
+def format_number(value: Any) -> str:
+    """``16`` for whole numbers, ``2.5`` otherwise — as the JSON renders it."""
+    return str(_normalize(value))
+
+
+def mutant_snippet(text: str) -> str:
+    """Collapse whitespace runs to one space and cap the length at 40 code
+    points, so a multi-line statement stays on one listing line."""
+    flat = _WHITESPACE.sub(" ", text)
+    if len(flat) <= _SNIPPET_LIMIT:
+        return flat
+    return flat[: _SNIPPET_LIMIT - 1] + "…"
 
 
 def error_text_line(envelope: Dict[str, str]) -> str:
@@ -134,6 +186,47 @@ def _top_methods(report: Dict[str, Any], top_n: int) -> str:
             )
         )
     return "".join(lines)
+
+
+def _mutation_header(report: Dict[str, Any]) -> str:
+    not_run = "(not run)"
+    timeout = report["timeoutSeconds"]
+    timeout_text = not_run if timeout is None else f"{format_number(timeout)}s per mutant"
+    project = report["projectRoot"] if report["projectRoot"] is not None else not_run
+    runner = report["runner"] if report["runner"] is not None else not_run
+    return (
+        f"{TOOL_NAME} {report['toolVersion']} — mutation report (schema {report['schemaVersion']})\n"
+        f"source:    {report['sourceRoot']}\n"
+        f"project:   {project}\n"
+        f"runner:    {runner}\n"
+        f"timeout:   {timeout_text}\n"
+    )
+
+
+def _mutation_summary(s: Dict[str, Any]) -> str:
+    rows = [
+        ("files:", s["fileCount"]),
+        ("mutants:", s["mutantCount"]),
+        ("killed:", s["killed"]),
+        ("timed out:", s["timedOut"]),
+        ("survived:", s["survived"]),
+        ("no coverage:", s["noCoverage"]),
+        ("compile errors:", s["compileErrors"]),
+        ("ignored:", s["ignored"]),
+    ]
+    if s["pending"] > 0:
+        rows.append(("pending:", s["pending"]))
+    score = s["mutationScore"]
+    rows.append(("score:", "n/a" if score is None else f"{score:.2f}%"))
+    return "Summary\n" + "".join(f"  {label:<16}{value}\n" for label, value in rows)
+
+
+def _mutant_line(m: Dict[str, Any]) -> str:
+    change = f"`{mutant_snippet(m['original'])}` → `{mutant_snippet(m['replacement'])}`"
+    method = "" if m["method"] is None else f"  {m['method']}"
+    return f"{m['file']}:{m['line']}:{m['column']}  {m['operator']}  {change}{method}"
+
+
 
 
 def _pad_start(s: str, width: int) -> str:

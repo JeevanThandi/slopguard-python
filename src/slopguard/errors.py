@@ -23,6 +23,9 @@ ERR_TEST_RUN_FAILED = "test_run_failed"
 ERR_COVERAGE_DECODE = "coverage_decode_failed"
 ERR_INVALID_ARGUMENT = "invalid_argument"
 ERR_UNSUPPORTED = "unsupported"
+ERR_BASELINE_FAILED = "baseline_failed"
+ERR_MUTATION_IN_PROGRESS = "mutation_in_progress"
+ERR_RESTORE_FAILED = "restore_failed"
 ERR_INTERNAL = "internal_error"
 
 
@@ -58,12 +61,14 @@ def parse_failed(path: str, underlying: object) -> SlopguardError:
     return SlopguardError(ERR_PARSE_FAILED, f"Failed to parse {path}: {underlying}")
 
 
-def project_root_not_found(searched_from: str) -> SlopguardError:
+def project_root_not_found(searched_from: str, hint: str = "") -> SlopguardError:
+    hint = hint or (
+        "Pass --project-dir to point at the project root, or --no-coverage to skip the test run."
+    )
     return SlopguardError(
         ERR_PROJECT_ROOT_MISSING,
-        f"No project root (pyproject.toml / setup.py / setup.cfg / .git) found at or "
-        f"above {searched_from}. Pass --project-dir to point at the project root, or "
-        f"--no-coverage to skip the test run.",
+        f"No project root (pyproject.toml / setup.py / setup.cfg / tox.ini / .git) found at or "
+        f"above {searched_from}. {hint}",
     )
 
 
@@ -97,6 +102,29 @@ def invalid_argument(name: str, reason: str) -> SlopguardError:
 
 def unsupported(reason: str) -> SlopguardError:
     return SlopguardError(ERR_UNSUPPORTED, f"Unsupported: {reason}")
+
+
+def baseline_failed(exit_code: int, output: str) -> SlopguardError:
+    return SlopguardError(
+        ERR_BASELINE_FAILED,
+        f"The test suite fails without any mutation (exit {exit_code}). "
+        f"Fix the failing tests first: {output}",
+    )
+
+
+def mutation_in_progress(pid: int, project_root: str) -> SlopguardError:
+    return SlopguardError(
+        ERR_MUTATION_IN_PROGRESS,
+        f"Another slopguard mutate run (pid {pid}) is using {project_root}.",
+    )
+
+
+def restore_failed(path: str, backup_path: str, underlying: object) -> SlopguardError:
+    return SlopguardError(
+        ERR_RESTORE_FAILED,
+        f"Could not restore {path} after mutation: {underlying}. "
+        f"The original is saved at {backup_path}.",
+    )
 
 
 def envelope_for(err: BaseException) -> Dict[str, str]:

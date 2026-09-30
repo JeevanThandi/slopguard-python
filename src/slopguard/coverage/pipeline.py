@@ -67,7 +67,7 @@ def run(
 
         if resolved.json_path:
             progress.phase("parsing coverage data")
-            index = _load_index(resolved.json_path, resolved.project_root)
+            index = load_index(resolved.json_path, resolved.project_root)
             if index.file_count() == 0:
                 notes.append(
                     "The test run produced no per-file coverage data — check that the "
@@ -159,7 +159,9 @@ def _project_context(project_dir: Optional[str], source_path: str) -> str:
     return os.path.abspath(source_path)
 
 
-def _load_index(json_path: str, project_root: str) -> CoverageIndex:
+def load_index(json_path: str, project_root: str) -> CoverageIndex:
+    """Read a ``coverage json`` report into a :class:`CoverageIndex`. Shared by
+    ``analyze`` and the ``mutate`` coverage baseline."""
     try:
         with open(json_path, "r", encoding="utf-8") as fh:
             text = fh.read()

@@ -2,10 +2,10 @@ PY ?= python3
 SRC := src
 COVERAGE_FLOOR := 95
 
-.PHONY: help test coverage dogfood baseline compile build clean
+.PHONY: help test coverage dogfood baseline mutate-baseline compile build clean
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-16s %s\n", $$1, $$2}'
 
 test: ## Run the test suite (stdlib unittest, no third-party deps)
 	PYTHONPATH=$(SRC) $(PY) -m unittest discover -s tests
@@ -25,6 +25,14 @@ baseline: ## Assert the sample-app regression baseline (needs: pip install cover
 	  | $(PY) -c 'import sys,json; r=json.load(sys.stdin)["summary"]; \
 	    assert r["methodCount"]==12, r; assert r["crappyMethodCount"]==0, r; \
 	    print("baseline ok:", r["methodCount"], "methods,", r["crappyMethodCount"], "crappy")'
+
+mutate-baseline: ## Assert the sample app kills every mutant: 12 mutants, 12 killed (needs: pip install coverage)
+	PYTHONPATH=$(SRC) $(PY) -m slopguard mutate \
+	  --path sample-apps/todolist/todolist --project-dir sample-apps/todolist \
+	  --json --quiet \
+	  | $(PY) -c 'import sys,json; r=json.load(sys.stdin)["summary"]; \
+	    assert r["mutantCount"]==12, r; assert r["killed"]==12, r; assert r["survived"]==0, r; \
+	    print("mutate baseline ok:", r["mutantCount"], "mutants,", r["killed"], "killed,", r["survived"], "survived")'
 
 compile: ## Byte-compile every module (a fast syntax gate)
 	$(PY) -m compileall -q $(SRC) tests

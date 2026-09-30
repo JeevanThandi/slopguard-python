@@ -31,6 +31,7 @@ class CoverageIndex:
     def __init__(self, coverage_map: Dict[str, FileCoverageData], project_root: str) -> None:
         self._by_abs: Dict[str, _IndexedFile] = {}
         self._by_basename: Dict[str, List[_IndexedFile]] = {}
+        self._by_real: Optional[Dict[str, _IndexedFile]] = None  # built on first exact lookup
         self.total_executable_lines = 0
         self.total_covered_lines = 0
         for name, data in coverage_map.items():
@@ -49,8 +50,14 @@ class CoverageIndex:
     def file_count(self) -> int:
         return len(self._by_abs)
 
-    def method_coverage(self, absolute_path: str, line: int, end_line: int) -> Optional[float]:
-        f = self._lookup(absolute_path)
+    def method_coverage(
+        self, absolute_path: str, line: int, end_line: int, exact: bool = False
+    ) -> Optional[float]:
+        """Line coverage in [0, 100] for ``[line, end_line]``, or ``None`` when
+        the file is unknown or no executable line falls in the span. ``exact``
+        matches the file's real path only, with no basename fallback
+        (``mutate`` queries the report of its own local run)."""
+        f = self._exact(absolute_path) if exact else self._lookup(absolute_path)
         if f is None:
             return None
         executable = 0
@@ -70,6 +77,11 @@ class CoverageIndex:
         if f is None or f.executable_lines == 0:
             return None
         return f.covered_lines / f.executable_lines * 100
+
+    def _exact(self, absolute_path: str) -> Optional[_IndexedFile]:
+        if self._by_real is None:
+            self._by_real = {os.path.realpath(path): f for path, f in self._by_abs.items()}
+        return self._by_real.get(os.path.realpath(absolute_path))
 
     def _lookup(self, absolute_path: str) -> Optional[_IndexedFile]:
         direct = self._by_abs.get(absolute_path)
